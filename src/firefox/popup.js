@@ -1,35 +1,57 @@
-let currentQuestion, currentQuestionId, originalUrl;
-
-const successMessage = "Correct! You can now access the AI Chatbot for the next 15 minutes. Redirecting you now.";
-const failureMessage = "Incorrect. Please try again. Reload the page to get a different question.";
+let currentQuestion, currentQuestionId, originalUrl, currentQuestionTitle, currentQuestionSlug;
 
 document.addEventListener('DOMContentLoaded', async function() {
-  const result = await browser.storage.local.get(['originalUrl']);
-  originalUrl = result.originalUrl;
-
-  const response = await browser.runtime.sendMessage({action: "getRandomQuestion"});
-  currentQuestion = response.question;
-  currentQuestionId = response.id;
-  document.getElementById('question').textContent = currentQuestion;
-
-  document.getElementById('submit').addEventListener('click', async function() {
-    const solution = document.getElementById('solution').value;
-    const response = await browser.runtime.sendMessage({
-      action: "checkAnswer", 
-      userAnswer: solution, 
-      question: currentQuestion,
-      id: currentQuestionId
-    });
-
-    if (response.isCorrect) {
-      document.getElementById('result').textContent = successMessage;
-      await browser.storage.local.set({lastSolvedTime: Date.now()});
-      setTimeout(async () => {
-        await browser.runtime.sendMessage({action: "redirectToOriginal"});
+    const result = await browser.storage.local.get(['originalUrl']);
+    originalUrl = result.originalUrl;
+    const response = await browser.runtime.sendMessage({action: "getRandomQuestion"});
+    currentQuestion = response.question;
+    currentQuestionId = response.id;
+    currentQuestionTitle = response.title;
+    currentQuestionSlug = response.slug; 
+    document.getElementById('question').textContent = currentQuestionTitle; 
+    document.getElementById('question_content').innerHTML = currentQuestion; 
+    document.getElementById('submit').addEventListener('click', async function() {
+        await browser.storage.local.set({ 
+            lastSubmittedSolution: "",
+            lastQuestionSlug: currentQuestionSlug
+        });
+        const leetCodeUrl = `https://leetcode.com/problems/${currentQuestionSlug}/description`;
+        await browser.tabs.create({ url: leetCodeUrl });
         window.close();
-      }, 2000);
-    } else {
-      document.getElementById('result').textContent = failureMessage;
+    });
+});
+
+document.getElementById('submit').addEventListener('click', function() {
+    chrome.storage.local.set({ 
+        lastSubmittedSolution: "",
+        lastQuestionSlug: currentQuestionSlug
+    }, function() {
+        chrome.runtime.sendMessage({
+            action: "openLeetCodeQuestion",
+            slug: currentQuestionSlug
+        });
+    });
+});
+
+browser.runtime.onMessage.addListener((message) => {
+    if (message.action === "updatePopup") {
+        const resultDiv = document.getElementById("result");
+        resultDiv.textContent = message.content;
+        resultDiv.style.backgroundColor = "#e7f4e7"; 
+        const header = document.getElementById("declaration_of_war");
+        const question = document.getElementById("question");
+        const questionContent = document.getElementById("question_content");
+        const questionSection = document.getElementById("question_section");
+        const submitButton = document.getElementById("submit");
+        if (header && question && questionContent && questionSection && submitButton) {
+            console.log("Removing elements");
+            header.remove();
+            question.remove();
+            questionContent.remove();
+            questionSection.remove();
+            submitButton.remove();
+        } else {
+            console.error("Elements not found");
+        }
     }
-  });
 });
