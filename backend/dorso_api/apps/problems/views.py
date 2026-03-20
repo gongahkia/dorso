@@ -9,8 +9,19 @@ from rest_framework.views import APIView
 from prometheus_client import Counter
 import structlog
 
-from .services import LeetCodeService, ProblemQueueService
-from .serializers import ProblemSubmissionSerializer, ProblemAttemptSerializer
+from .services import (
+    LeetCodeService,
+    ProblemQueueService,
+    ChallengeSelectionService,
+    CodeforcesService,
+    PracticeCatalogService,
+)
+from .serializers import (
+    ProblemSubmissionSerializer,
+    ProblemAttemptSerializer,
+    CodeforcesVerificationSerializer,
+)
+from dorso_api.apps.tracking.models import ExtensionUser
 
 logger = structlog.get_logger(__name__)
 
@@ -38,26 +49,25 @@ class RandomProblemView(APIView):
     """
 
     def get(self, request):
-        service = LeetCodeService()
-        problem = service.get_random_problem()
+        service = ChallengeSelectionService()
+        extension_id = request.query_params.get('extension_id')
+        user = None
+
+        if extension_id:
+            user = ExtensionUser.objects.filter(extension_id=extension_id).first()
+
+        problem = service.get_random_problem(user=user)
 
         if problem:
             problems_fetched.inc()
 
             logger.info(
                 "random_problem_fetched",
-                slug=problem['titleSlug'],
+                slug=problem['slug'],
                 difficulty=problem.get('difficulty')
             )
 
-            return Response({
-                'id': problem['questionId'],
-                'title': problem['title'],
-                'slug': problem['titleSlug'],
-                'content': problem['content'],
-                'difficulty': problem['difficulty'],
-                'exampleTestcases': problem.get('exampleTestcases', ''),
-            })
+            return Response(problem)
 
         logger.error("failed_to_fetch_random_problem")
         return Response(
@@ -85,6 +95,7 @@ class SubmitSolutionView(APIView):
                 "problem_submitted",
                 extension_id=attempt.user.extension_id,
                 problem_slug=attempt.problem_slug,
+                source=attempt.source,
                 difficulty=attempt.difficulty,
                 time_taken=attempt.time_taken_seconds,
             )
@@ -121,6 +132,7 @@ class LogAttemptView(APIView):
                 "problem_attempted",
                 extension_id=attempt.user.extension_id,
                 problem_slug=attempt.problem_slug,
+                source=attempt.source,
                 difficulty=attempt.difficulty,
             )
 
@@ -130,6 +142,48 @@ class LogAttemptView(APIView):
             }, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class VerifyCodeforcesView(APIView):
+    """
+    Verify that the linked Codeforces handle solved the assigned problem.
+    POST /api/v1/problems/verify-codeforces/
+    """
+
+    def post(self, request):
+        serializer = CodeforcesVerificationSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        user = ExtensionUser.objects.get(
+            extension_id=serializer.validated_data['extension_id']
+        )
+        service = CodeforcesService()
+        verified = service.verify_submission(
+            handle=user.codeforces_handle,
+            challenge_id=serializer.validated_data['challenge_id'],
+            assigned_at_seconds=serializer.validated_data.get('assigned_at'),
+        )
+
+        return Response({
+            'verified': verified,
+            'handle': user.codeforces_handle,
+            'challenge_id': serializer.validated_data['challenge_id'],
+            'message': 'Accepted submission found.' if verified else 'No accepted submission matched the assigned challenge yet.',
+        })
+
+
+class PracticeDeckView(APIView):
+    """
+    Return a curated practice deck from catalog-only sources.
+    GET /api/v1/problems/practice-deck/
+    """
+
+    def get(self, request):
+        service = PracticeCatalogService()
+        return Response({
+            'items': service.get_practice_deck(),
+        })
 
 
 @api_view(['GET'])
@@ -142,14 +196,7 @@ def fetch_problem_by_slug(request, slug):
     problem = service.fetch_problem(slug)
 
     if problem:
-        return Response({
-            'id': problem['questionId'],
-            'title': problem['title'],
-            'slug': problem['titleSlug'],
-            'content': problem['content'],
-            'difficulty': problem['difficulty'],
-            'exampleTestcases': problem.get('exampleTestcases', ''),
-        })
+        return Response(service._normalize_problem(problem, 'matched'))
 
     return Response(
         {'error': f'Problem "{slug}" not found.'},

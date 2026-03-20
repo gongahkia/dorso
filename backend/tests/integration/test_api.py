@@ -126,6 +126,7 @@ class TestProblemSubmissionAPI:
         # Verify user stats were updated
         extension_user.refresh_from_db()
         assert extension_user.total_solves == 1
+        assert extension_user.total_attempts == 1
 
     def test_submit_problem_invalid_user(self, api_client):
         """Test submitting problem with invalid user."""
@@ -142,6 +143,26 @@ class TestProblemSubmissionAPI:
 
 
 @pytest.mark.django_db
+class TestProblemAttemptAPI:
+    """Test failed/in-progress problem attempt logging."""
+
+    def test_log_problem_attempt(self, api_client, extension_user):
+        url = reverse('log-attempt')
+        response = api_client.post(url, {
+            'extension_id': extension_user.extension_id,
+            'problem_slug': 'graph-problem',
+            'problem_title': 'Graph Problem',
+            'difficulty': 'Medium',
+            'source': 'leetcode',
+            'challenge_id': '2',
+            'topic_tags': ['Graph'],
+        }, format='json')
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data['success'] is True
+
+
+@pytest.mark.django_db
 class TestRandomProblemAPI:
     """Test random problem endpoint."""
 
@@ -149,16 +170,22 @@ class TestRandomProblemAPI:
         """Test getting a random problem."""
         # Mock LeetCode service to avoid actual API calls
         mock_problem = {
-            'id': '1',
+            'source': 'leetcode',
+            'source_label': 'LeetCode',
+            'challenge_id': '1',
             'title': 'Two Sum',
             'slug': 'two-sum',
+            'url': 'https://leetcode.com/problems/two-sum/description/',
             'content': '<p>Test problem</p>',
             'difficulty': 'Easy',
-            'exampleTestcases': '[]'
+            'topic_tags': ['Array', 'Hash Table'],
+            'selection_mode': 'matched',
+            'supports_verification': True,
+            'example_testcases': '[]'
         }
 
         mocker.patch(
-            'dorso_api.apps.problems.views.LeetCodeService.get_random_problem',
+            'dorso_api.apps.problems.views.ChallengeSelectionService.get_random_problem',
             return_value=mock_problem
         )
 
@@ -168,6 +195,8 @@ class TestRandomProblemAPI:
         assert response.status_code == status.HTTP_200_OK
         assert response.data['title'] == 'Two Sum'
         assert response.data['difficulty'] == 'Easy'
+        assert response.data['source'] == 'leetcode'
+        assert response.data['selection_mode'] == 'matched'
 
 
 @pytest.mark.django_db
@@ -187,3 +216,146 @@ class TestUserStatsAPI:
         assert response.data['current_streak'] == 2
         assert response.data['longest_streak'] == 3
         assert 'solve_rate' in response.data
+        assert 'preferences' in response.data
+        assert 'source_mix' in response.data
+
+    def test_get_user_attempts_with_source_filter(self, api_client, extension_user):
+        extension_user.attempts.create(
+            problem_slug='one',
+            problem_title='One',
+            difficulty='Easy',
+            source='leetcode',
+            solved=False,
+        )
+        extension_user.attempts.create(
+            problem_slug='two',
+            problem_title='Two',
+            difficulty='Easy',
+            source='codeforces',
+            solved=True,
+        )
+
+        url = reverse(
+            'users-attempts',
+            kwargs={'extension_id': extension_user.extension_id}
+        )
+        response = api_client.get(url, {'source': 'codeforces'})
+
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.data) == 1
+        assert response.data[0]['source'] == 'codeforces'
+
+
+@pytest.mark.django_db
+class TestPreferencesAndIdentitiesAPI:
+    """Test preference and identity endpoints."""
+
+    def test_update_preferences(self, api_client, extension_user):
+        """Test updating source and difficulty preferences."""
+        url = reverse(
+            'user-preferences',
+            kwargs={'extension_id': extension_user.extension_id}
+        )
+        response = api_client.patch(url, {
+            'preferred_difficulties': ['Easy', 'Medium'],
+            'preferred_topics': ['Array', 'Graph'],
+            'enabled_verified_sources': ['leetcode'],
+        }, format='json')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['preferred_difficulties'] == ['Easy', 'Medium']
+        assert response.data['preferred_topics'] == ['Array', 'Graph']
+
+    def test_get_preferences(self, api_client, extension_user):
+        url = reverse(
+            'user-preferences',
+            kwargs={'extension_id': extension_user.extension_id}
+        )
+        response = api_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['enabled_verified_sources'] == ['leetcode']
+
+    def test_update_identities(self, api_client, extension_user):
+        """Test linking a Codeforces handle."""
+        url = reverse(
+            'user-identities',
+            kwargs={'extension_id': extension_user.extension_id}
+        )
+        response = api_client.patch(url, {
+            'codeforces_handle': 'tourist',
+            'codewars_username': 'kata-grinder',
+        }, format='json')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['codeforces_handle'] == 'tourist'
+        assert response.data['codewars_username'] == 'kata-grinder'
+
+    def test_get_identities(self, api_client, extension_user):
+        extension_user.codeforces_handle = 'tourist'
+        extension_user.save(update_fields=['codeforces_handle'])
+
+        url = reverse(
+            'user-identities',
+            kwargs={'extension_id': extension_user.extension_id}
+        )
+        response = api_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['codeforces_handle'] == 'tourist'
+
+
+@pytest.mark.django_db
+class TestCodeforcesVerificationAPI:
+    """Test Codeforces verification endpoint."""
+
+    def test_verify_codeforces_solution(self, api_client, extension_user, mocker):
+        """Test verifying an accepted Codeforces submission."""
+        extension_user.codeforces_handle = 'tourist'
+        extension_user.save(update_fields=['codeforces_handle'])
+
+        mocker.patch(
+            'dorso_api.apps.problems.views.CodeforcesService.verify_submission',
+            return_value=True,
+        )
+
+        url = reverse('verify-codeforces')
+        response = api_client.post(url, {
+            'extension_id': extension_user.extension_id,
+            'challenge_id': '1-A',
+            'assigned_at': 1710000000,
+        }, format='json')
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['verified'] is True
+        assert response.data['challenge_id'] == '1-A'
+
+
+@pytest.mark.django_db
+class TestAccessLogAPI:
+    """Test chatbot access logging."""
+
+    def test_log_access_by_extension_id(self, api_client, extension_user):
+        url = reverse('log-access')
+        response = api_client.post(url, {
+            'extension_id': extension_user.extension_id,
+            'chatbot_url': 'https://chatgpt.com/',
+            'chatbot_name': 'ChatGPT',
+        }, format='json')
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data['chatbot_name'] == 'ChatGPT'
+
+
+@pytest.mark.django_db
+class TestPracticeDeckAPI:
+    """Test practice deck endpoint."""
+
+    def test_get_practice_deck(self, api_client):
+        """Test catalog-only practice deck retrieval."""
+        url = reverse('practice-deck')
+        response = api_client.get(url)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert 'items' in response.data
+        assert response.data['items']

@@ -6,6 +6,12 @@ from django.db import models
 from django.utils import timezone
 from datetime import timedelta
 from django.core.validators import MinValueValidator
+from dorso_api.apps.problems.constants import SOURCE_LABELS
+
+
+def default_verified_sources():
+    """Default verified challenge sources for a new install."""
+    return ['leetcode']
 
 
 class ExtensionUser(models.Model):
@@ -45,6 +51,7 @@ class ExtensionUser(models.Model):
         default=0,
         validators=[MinValueValidator(0)]
     )
+    last_solved_at = models.DateTimeField(null=True, blank=True)
     total_attempts = models.IntegerField(
         default=0,
         validators=[MinValueValidator(0)]
@@ -52,6 +59,14 @@ class ExtensionUser(models.Model):
 
     # Preferences
     is_active = models.BooleanField(default=True)
+    preferred_difficulties = models.JSONField(default=list, blank=True)
+    preferred_topics = models.JSONField(default=list, blank=True)
+    enabled_verified_sources = models.JSONField(
+        default=default_verified_sources,
+        blank=True
+    )
+    codeforces_handle = models.CharField(max_length=255, blank=True, default='')
+    codewars_username = models.CharField(max_length=255, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -79,16 +94,9 @@ class ExtensionUser(models.Model):
 
         self.total_solves += 1
 
-        # Update streak logic
-        last_solve = ProblemAttempt.objects.filter(
-            user=self,
-            solved=True
-        ).exclude(
-            attempted_at=solved_at
-        ).order_by('-attempted_at').first()
-
-        if last_solve:
-            time_diff = solved_at - last_solve.attempted_at
+        # Update streak logic using the most recent recorded solve timestamp.
+        if self.last_solved_at:
+            time_diff = solved_at - self.last_solved_at
             # If last solve was within 24 hours, increment streak
             if time_diff <= timedelta(hours=24):
                 self.current_streak += 1
@@ -101,6 +109,7 @@ class ExtensionUser(models.Model):
         if self.current_streak > self.longest_streak:
             self.longest_streak = self.current_streak
 
+        self.last_solved_at = solved_at
         self.save()
 
     def get_active_session(self):
@@ -136,6 +145,14 @@ class ProblemAttempt(models.Model):
             ('Hard', 'Hard'),
         ]
     )
+    source = models.CharField(
+        max_length=32,
+        choices=[(key, label) for key, label in SOURCE_LABELS.items()],
+        default='leetcode',
+        db_index=True,
+    )
+    challenge_id = models.CharField(max_length=255, blank=True, default='')
+    topic_tags = models.JSONField(default=list, blank=True)
     attempted_at = models.DateTimeField(auto_now_add=True)
     solved = models.BooleanField(default=False)
     time_taken_seconds = models.IntegerField(
@@ -153,6 +170,7 @@ class ProblemAttempt(models.Model):
         indexes = [
             models.Index(fields=['user', '-attempted_at']),
             models.Index(fields=['problem_slug']),
+            models.Index(fields=['source']),
             models.Index(fields=['solved']),
             models.Index(fields=['-attempted_at']),
         ]

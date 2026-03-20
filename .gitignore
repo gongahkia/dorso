@@ -1,5 +1,14 @@
 myenv
+.venv
+.venv312
 __pycache__
+node_modules
+dist
+.pytest_cache
+.coverage
+htmlcov
+playwright-report
+test-results
 
 # Environment variables - contain sensitive credentials
 .env
