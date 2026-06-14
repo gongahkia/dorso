@@ -31,9 +31,9 @@ As [AI chatbots](https://cloud.google.com/use-cases/ai-chatbot) become an everyd
 | [CSV](https://en.wikipedia.org/wiki/Comma-separated_values) | Wide support for tabular data and spreadsheet operations|
 | [TSV](https://en.wikipedia.org/wiki/Tab-separated_values) | Tab-delimited CSV alternative for ease of parsing and storage|
 | [JSON](https://en.wikipedia.org/wiki/JSON) | Human-readable and universally supported storage format|
-| [NDJSON](https://en.wikipedia.org/wiki/JSON_streaming#Compatibility) | JSON optimised for streaming and large datasets |
-| [XML](https://en.wikipedia.org/wiki/XML) | Extensible and hierarchy-capable for legacy and enterprise |
-| [YAML](https://en.wikipedia.org/wiki/YAML) | Human-readable storage for configuration files |
+| [Markdown](https://en.wikipedia.org/wiki/Markdown) | Portable prose archive for notes and review |
+| [PDF](https://en.wikipedia.org/wiki/PDF) | Printable offline archive *(placeholder until M6)* |
+| [HTML](https://en.wikipedia.org/wiki/HTML) | Shareable offline archive *(placeholder until M6)* |
 
 ## Chatbot Coverage
 
@@ -103,7 +103,7 @@ Your use of Rakuzaichi and its features is entirely at your own risk. Rakuzaichi
 
 ### Export Functionality Limitations
 
-Data exported by Rakuzaichi in JSON, YAML, Parquet, XML, CSV, or other formats may contain limitations, inconsistencies, or formatting issues. Users should:
+Data exported by Rakuzaichi in JSON, Markdown, CSV, TSV, PDF, HTML, or other formats may contain limitations, inconsistencies, or formatting issues. Users should:
 * Not rely solely on exported chat data for critical decisions
 * Verify all information against the original chat interfaces
 * Understand that format conversion may result in partial data loss or transformation
