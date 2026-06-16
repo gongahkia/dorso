@@ -57,8 +57,9 @@ As [AI chatbots](https://cloud.google.com/use-cases/ai-chatbot) become an everyd
 
 ## Usage
 
-> [!IMPORTANT]  
-> Read the [legal disclaimer](#legal-disclaimer) before using `Rakuzaichi`.  
+> [!IMPORTANT]
+> Read the [legal disclaimer](#legal-disclaimer) before using `Rakuzaichi`.
+> Read the [privacy policy](./PRIVACY.md) for local storage, model-download, and host-permission details.
 
 1. Clone the repository.
 
