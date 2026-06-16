@@ -9,6 +9,8 @@ Rakuzaichi adds an open-threads layer over your vault, surfacing TODO/FIXME/REF/
 
 Everything lives on-device in IndexedDB, with Obsidian sync, encrypted backups, and offline exports for 15 LLM platforms.
 
+![Rakuzaichi demo](./asset/reference/demo.gif)
+
 ## Rationale
 
 As [AI chatbots](https://cloud.google.com/use-cases/ai-chatbot) become an everyday tool, being able to [store local copies](https://www.reddit.com/r/cybersecurity_help/comments/1ae6vzk/cloud_vs_local_storage/) of your past chat logs becomes increasingly important.
