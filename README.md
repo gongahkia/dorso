@@ -3,13 +3,17 @@
 
 # `Rakuzaichi`
 
-Browser extension that [stores](#architecture) your [LLM](#chatbot-coverage) chat history [locally](#export-formats) *(for the future)*.
+Zero-server browser-extension vault for AI chats: capture conversations locally, search them later, and export or sync them without a backend.
+
+Rakuzaichi adds an open-threads layer over your vault, surfacing TODO/FIXME/REF/PROMPT-style follow-ups from explicit tags and local extraction.
+
+Everything lives on-device in IndexedDB, with Obsidian sync, encrypted backups, and offline exports for 15 LLM platforms.
 
 ## Rationale
 
 As [AI chatbots](https://cloud.google.com/use-cases/ai-chatbot) become an everyday tool, being able to [store local copies](https://www.reddit.com/r/cybersecurity_help/comments/1ae6vzk/cloud_vs_local_storage/) of your past chat logs becomes increasingly important.
 
-`Rakuzaichi` puts you ***back in control*** of your data by [exporting your chat history](#screenshots) *(and other useful metadata)* at the click of a button in the following formats, with a focus on serialisation, transfer and storage.
+`Rakuzaichi` keeps your chat archive local while making it searchable, syncable, and portable across Markdown, JSON, CSV, TSV, HTML, PDF, Obsidian notes, and encrypted vault backups.
 
 ## Stack
 
@@ -32,8 +36,8 @@ As [AI chatbots](https://cloud.google.com/use-cases/ai-chatbot) become an everyd
 | [TSV](https://en.wikipedia.org/wiki/Tab-separated_values) | Tab-delimited CSV alternative for ease of parsing and storage|
 | [JSON](https://en.wikipedia.org/wiki/JSON) | Human-readable and universally supported storage format|
 | [Markdown](https://en.wikipedia.org/wiki/Markdown) | Portable prose archive for notes and review |
-| [PDF](https://en.wikipedia.org/wiki/PDF) | Printable offline archive *(placeholder until M6)* |
-| [HTML](https://en.wikipedia.org/wiki/HTML) | Shareable offline archive *(placeholder until M6)* |
+| [PDF](https://en.wikipedia.org/wiki/PDF) | Printable offline archive |
+| [HTML](https://en.wikipedia.org/wiki/HTML) | Shareable offline archive |
 
 ## Chatbot Coverage
 
@@ -82,12 +86,6 @@ Support for other browsers like Opera, Vivaldi have not been extensively tested,
 ## Origins
 
 Owl history was merged into Rakuzaichi on 2026-06-14 via merge commit `51e556a66bdd4901386c078bebab4a9a1f270ca3`; Owl's tree was not imported.
-
-## Reference
-
-The name `Rakuzaichi` is in reference to the [Rakuzaichi Auction House](https://kagurabachi.fandom.com/wiki/Rakuzaichi_Auction_House) (楽座市) owned by the [Sazanami Clan](https://kagurabachi.fandom.com/wiki/Sazanami_Clan) (漣家 ), the main setting for the [Rakuzaichi Arc](https://kagurabachi.fandom.com/wiki/Rakuzaichi_Arc) of the ongoing manga series [Kagurabachi](https://kagurabachi.fandom.com/wiki/Kagurabachi_Wiki).
-
-![](./asset/logo/rakuzaichi.webp)
 
 ## Legal disclaimer
 
@@ -144,3 +142,9 @@ This disclaimer may be updated from time to time without notice. It is your resp
 ### Termination of Service
 
 Rakuzaichi reserves the right to modify, suspend, or discontinue the extension or any part thereof at any time without prior notice or liability.
+
+## Etymology
+
+The name `Rakuzaichi` references the [Rakuzaichi Auction House](https://kagurabachi.fandom.com/wiki/Rakuzaichi_Auction_House) (楽座市) owned by the [Sazanami Clan](https://kagurabachi.fandom.com/wiki/Sazanami_Clan) (漣家), the main setting for the [Rakuzaichi Arc](https://kagurabachi.fandom.com/wiki/Rakuzaichi_Arc) of [Kagurabachi](https://kagurabachi.fandom.com/wiki/Kagurabachi_Wiki).
+
+![](./asset/logo/rakuzaichi.webp)
