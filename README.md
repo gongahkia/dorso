@@ -90,6 +90,10 @@ Support for other browsers like Opera, Vivaldi have not been extensively tested,
 
 Owl history was merged into Rakuzaichi on 2026-06-14 via merge commit `51e556a66bdd4901386c078bebab4a9a1f270ca3`; Owl's tree was not imported.
 
+## License
+
+MIT. See [LICENSE](./LICENSE).
+
 ## Legal disclaimer
 
 The Rakuzaichi browser extension ("Rakuzaichi") is provided "AS IS" and "AS AVAILABLE," without warranty of any kind, express or implied. By using Rakuzaichi, you acknowledge that you have read, understood, and agree to be bound by this disclaimer's below terms and limitations.
