@@ -1,6 +1,3 @@
-[![](https://img.shields.io/badge/dorso_1.0.0-passing-dark_green)](https://github.com/gongahkia/dorso/releases/tag/1.0.0)
-[![](https://img.shields.io/badge/dorso_2.0.0-passing-green)](https://github.com/gongahkia/dorso/releases/tag/2.0.0)
-
 # `Dorso`
 
 [CAPTCHA](https://en.wikipedia.org/wiki/CAPTCHA) but to [catch braindead programmers](#architecture) instead of bots.
