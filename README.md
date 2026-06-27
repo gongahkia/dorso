@@ -1,5 +1,7 @@
 # `Dorso`
 
+<img src="./asset/reference/demo.gif" width="100%">
+
 [CAPTCHA](https://en.wikipedia.org/wiki/CAPTCHA) but to [catch braindead programmers](#architecture) instead of bots.
 
 <div align="center">
