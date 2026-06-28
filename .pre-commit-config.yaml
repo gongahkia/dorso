@@ -47,7 +47,6 @@ repos:
       - id: bandit
         files: ^backend/
         args: ['-c', 'backend/pyproject.toml']
-        exclude: ^backend/tests/
 
   # JavaScript/TypeScript formatting with Prettier
   - repo: https://github.com/pre-commit/mirrors-prettier
