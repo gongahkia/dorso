@@ -1,5 +1,11 @@
 # Privacy
 
+## Extension Permissions
+
+- `storage`: keep challenge state, settings, timers, and local receipts.
+- `downloads`: write the optional CLI status JSON export under the browser Downloads directory.
+- `alarms`: refresh the optional CLI status export periodically while enabled.
+
 ## Host Permissions
 
 - `https://chatgpt.com/*`: show the local gate on ChatGPT.
@@ -19,7 +25,11 @@
 
 Dorso's extension flow stores challenge state, settings, timers, and solve status in browser extension storage.
 
+Optional CLI export writes a local JSON file using the browser downloads API. The file is meant for `@dorso/cli` and is not uploaded by Dorso.
+
 Exception: the optional SVG badge uses a stateless Cloudflare Worker documented in [cloudflare/README.md](../cloudflare/README.md). Badge state is HMAC-signed and encoded into the URL; the Worker does not keep per-user server-side state.
+
+Optional leaderboard submission is opt-in. Dorso hashes the repository URL locally, requests permission for the Dorso Worker host, and sends only the repo hash, anonymous install hash, score, longest run, and timestamp.
 
 ## No Tracking
 

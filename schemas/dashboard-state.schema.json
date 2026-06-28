@@ -9,7 +9,16 @@
     "hasActiveSession",
     "session",
     "currentChallenge",
+    "solveReceipt",
     "enabledTargetIds",
+    "enabledSources",
+    "perTargetRules",
+    "cliStatusExportEnabled",
+    "cliStatusExportPath",
+    "cliStatusLastExportedAt",
+    "cliStatusExportError",
+    "aiFast",
+    "leaderboardRepoUrl",
     "sessionDurationMinutes",
     "emergencyBypassesPerWeek",
     "bypassesThisWeek",
@@ -19,7 +28,9 @@
     "longestRun",
     "graceDaysRemaining",
     "isPaused",
+    "hasCompletedOnboarding",
     "supportedTargets",
+    "supportedSources",
     "uiMessage",
     "messageFailureCount",
     "leetcodeDetectionWarning"
@@ -101,11 +112,127 @@
         }
       ]
     },
+    "solveReceipt": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["problemTitle", "sourceLabel", "timeToSolveMs", "solvedAt", "currentRun"],
+          "properties": {
+            "problemTitle": {
+              "type": "string"
+            },
+            "sourceLabel": {
+              "type": "string"
+            },
+            "timeToSolveMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "solvedAt": {
+              "type": "string"
+            },
+            "currentRun": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      ]
+    },
     "enabledTargetIds": {
       "type": "array",
       "items": {
         "type": "string"
       }
+    },
+    "enabledSources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "perTargetRules": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["schedule", "difficultyOverride", "sourcesOverride"],
+        "properties": {
+          "schedule": {
+            "enum": ["always", "weekdays", "weekends", "custom"]
+          },
+          "customCron": {
+            "type": "string"
+          },
+          "difficultyOverride": {
+            "enum": ["default", "easy", "medium", "hard"]
+          },
+          "sourcesOverride": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "cliStatusExportEnabled": {
+      "type": "boolean"
+    },
+    "cliStatusExportPath": {
+      "type": "string"
+    },
+    "cliStatusLastExportedAt": {
+      "type": ["string", "null"]
+    },
+    "cliStatusExportError": {
+      "type": "string"
+    },
+    "aiFast": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["active", "durationHours", "startedAt", "endsAt", "remainingMs", "plannedSummary"],
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "durationHours": {
+          "type": "integer",
+          "enum": [24, 168, 720]
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "endsAt": {
+          "type": "string"
+        },
+        "remainingMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "plannedSummary": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["solves", "drillsCompleted"],
+          "properties": {
+            "solves": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "drillsCompleted": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "leaderboardRepoUrl": {
+      "type": "string"
     },
     "sessionDurationMinutes": {
       "type": "number",
@@ -142,6 +269,9 @@
     "isPaused": {
       "type": "boolean"
     },
+    "hasCompletedOnboarding": {
+      "type": "boolean"
+    },
     "supportedTargets": {
       "type": "array",
       "items": {
@@ -172,6 +302,25 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      }
+    },
+    "supportedSources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "label", "isAvailable"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "isAvailable": {
+            "type": "boolean"
           }
         }
       }

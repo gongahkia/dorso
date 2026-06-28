@@ -4,18 +4,37 @@ import {
     SOURCE_LABELS,
     STORAGE_KEYS,
 } from '../../shared/core/constants.js';
+import { computeCognitiveIndex } from '../../shared/core/atrophy.js';
+import { AI_FAST_DURATION_HOURS } from '../../shared/core/ai-fast.js';
 import { EMERGENCY_BYPASS_OPTIONS } from '../../shared/core/emergency-bypass.js';
+import {
+    DEFAULT_TARGET_RULE,
+    TARGET_RULE_DIFFICULTIES,
+    TARGET_RULE_SCHEDULES,
+    getTargetOrigin,
+    normalizeTargetRule,
+} from '../../shared/core/target-rules.js';
+import { DEFAULT_CLI_STATUS_EXPORT_PATH } from '../../shared/core/cli-status.js';
 import { formatDuration } from '../lib/formatters.js';
 import {
     getDigestEntries,
     renderDigestMarkdown,
     renderDigestSvg,
 } from '../lib/digest-svg.js';
-import { createBadgeEmbeds } from '../lib/badge-url.js';
+import { renderReceiptSvg } from '../lib/receipt-svg.js';
+import {
+    createBadgeEmbeds,
+    createLeaderboardSubmission,
+} from '../lib/badge-url.js';
+import {
+    SOLVE_SHARE_TEXT,
+    createSolveShareText,
+} from './share-text.js';
 import validateDashboardState from '../lib/dashboard-state-validator.js';
 import {
     clearStorage,
     getStorageValues,
+    requestOptionalHostPermission,
     sendRuntimeMessage,
     setStorageValues,
 } from '../lib/browser-api.js';
@@ -24,6 +43,30 @@ let countdownTimer = null;
 let latestState = null;
 let latestWhatIAsked = [];
 const redactedWhatIAskedTimestamps = new Set();
+const mainPanelIds = [
+    'statusPanel',
+    'challengePanel',
+    'controlPanel',
+    'fastPanel',
+    'cliPanel',
+    'badgePanel',
+    'sourcesPanel',
+    'sitesPanel',
+    'rulesPanel',
+    'disclosurePanel',
+];
+const scheduleLabels = {
+    always: 'Always',
+    weekdays: 'Weekdays',
+    weekends: 'Weekends',
+    custom: 'Custom',
+};
+const difficultyLabels = {
+    default: 'Default',
+    easy: 'Easy',
+    medium: 'Medium',
+    hard: 'Hard',
+};
 
 function clearTimers() {
     if (countdownTimer) {
@@ -34,6 +77,13 @@ function clearTimers() {
 
 function resetPanel(panel) {
     panel.replaceChildren();
+}
+
+function setMainPanelsHidden(hidden) {
+    mainPanelIds.forEach((panelId) => {
+        document.getElementById(panelId).hidden = hidden;
+    });
+    document.getElementById('sharePanel').hidden = true;
 }
 
 function createElement(tagName, options = {}) {
@@ -86,6 +136,18 @@ function createButtonRow(buttons) {
     return row;
 }
 
+function createSelect(name, value, options, labels) {
+    const select = createElement('select');
+    select.name = name;
+    options.forEach((optionValue) => {
+        const option = createElement('option', { text: labels[optionValue] || optionValue });
+        option.value = optionValue;
+        select.append(option);
+    });
+    select.value = value;
+    return select;
+}
+
 function createSnippetField(label, value) {
     const wrapper = createElement('label', { className: 'snippet-field' });
     const input = createElement('input', { type: 'text' });
@@ -126,7 +188,7 @@ function downloadTextFile(filename, content, type) {
     URL.revokeObjectURL(url);
 }
 
-async function downloadDigestPng(svg) {
+async function loadSvgImage(svg) {
     const image = new Image();
     const imageUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
     await new Promise((resolve, reject) => {
@@ -134,14 +196,33 @@ async function downloadDigestPng(svg) {
         image.onerror = reject;
         image.src = imageUrl;
     });
+    return image;
+}
+
+async function rasterizeSvgToPng(svg) {
+    const image = await loadSvgImage(svg);
+
+    if (globalThis.OffscreenCanvas) {
+        const canvas = new OffscreenCanvas(800, 400);
+        const context = canvas.getContext('2d');
+        context.drawImage(image, 0, 0);
+        return canvas.convertToBlob({ type: 'image/png' });
+    }
 
     const canvas = document.createElement('canvas');
     canvas.width = 800;
     canvas.height = 400;
     const context = canvas.getContext('2d');
     context.drawImage(image, 0, 0);
-
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) {
+        throw new Error('PNG export failed.');
+    }
+    return blob;
+}
+
+async function downloadDigestPng(svg) {
+    const blob = await rasterizeSvgToPng(svg);
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -201,6 +282,57 @@ function createRunMetrics(state) {
     return metrics;
 }
 
+function getReceiptSvg(state) {
+    return renderReceiptSvg({
+        ...(state.solveReceipt || {}),
+        currentRun: state.solveReceipt?.currentRun ?? state.currentRun,
+        cognitiveIndex: computeCognitiveIndex({
+            solvesInLast7d: Number(state.currentRun || 0),
+            sourceDiversityRatio: new Set(state.enabledSources || []).size > 1 ? 1 : 0,
+            bypassesThisWeek: Number(state.bypassesThisWeek || 0),
+        }),
+    });
+}
+
+async function copyReceiptImage(state) {
+    if (!globalThis.ClipboardItem || !navigator.clipboard?.write) {
+        throw new Error('Image clipboard unavailable.');
+    }
+
+    const blob = await rasterizeSvgToPng(getReceiptSvg(state));
+    await navigator.clipboard.write([
+        new ClipboardItem({
+            [blob.type]: blob,
+        }),
+    ]);
+}
+
+async function shareReceipt(state) {
+    const text = createSolveShareText(state.solveReceipt);
+    const blob = await rasterizeSvgToPng(getReceiptSvg(state));
+    const file = new File([blob], SOLVE_SHARE_TEXT.imageName, { type: blob.type });
+
+    if (navigator.share) {
+        const shareData = {
+            title: SOLVE_SHARE_TEXT.title,
+            text,
+            files: [file],
+        };
+        if (!navigator.canShare || navigator.canShare({ files: [file] })) {
+            await navigator.share(shareData);
+        } else {
+            await navigator.share({
+                title: SOLVE_SHARE_TEXT.title,
+                text,
+            });
+        }
+        return;
+    }
+
+    await navigator.clipboard.writeText(text);
+    await copyReceiptImage(state);
+}
+
 function renderStatus(state) {
     const panel = document.getElementById('statusPanel');
     resetPanel(panel);
@@ -243,18 +375,23 @@ function renderStatus(state) {
     }
 
     clearTimers();
+    const fastActive = Boolean(state.aiFast?.active);
     panel.append(
         createElement('span', {
             className: 'status-pill',
-            text: state.isPaused ? 'Paused' : 'Protecting',
+            text: fastActive ? 'AI Fast' : (state.isPaused ? 'Paused' : 'Protecting'),
         }),
         createElement('h2', {
-            text: state.isPaused ? 'Dorso is paused.' : 'Dorso is protecting selected sites.',
+            text: fastActive
+                ? 'AI fast is active.'
+                : (state.isPaused ? 'Dorso is paused.' : 'Dorso is protecting selected sites.'),
         }),
         createElement('p', {
-            text: state.isPaused
-                ? 'Protected chatbot sites are temporarily open until you resume Dorso.'
-                : 'Visit a selected chatbot site and Dorso will require an accepted LeetCode submission before the page becomes usable.',
+            text: fastActive
+                ? 'Selected chatbot sites stay locked behind challenge verification until the fast ends.'
+                : (state.isPaused
+                    ? 'Protected chatbot sites are temporarily open until you resume Dorso.'
+                    : 'Visit a selected chatbot site and Dorso will require challenge verification before the page becomes usable.'),
         }),
         createRunMetrics(state),
     );
@@ -283,6 +420,25 @@ function renderChallenge(state) {
         return;
     }
 
+    const buttons = [
+        createButton({
+            label: 'Get Another',
+            className: 'button-secondary',
+            id: 'refreshChallengeButton',
+            onClick: () => startChallenge(true),
+        }),
+    ];
+    if (challenge.url) {
+        buttons.unshift(createButton({
+            label: 'Open Challenge',
+            className: 'button-primary',
+            id: 'openChallengeButton',
+            onClick: () => {
+                window.open(challenge.url, '_blank', 'noopener,noreferrer');
+            },
+        }));
+    }
+
     panel.append(
         createSectionHead(
             challenge.title,
@@ -290,20 +446,58 @@ function renderChallenge(state) {
         ),
         createElement('p', { text: challenge.guidance }),
         createChipRow(challenge.topic_tags || []),
+        createButtonRow(buttons),
+    );
+}
+
+function renderSolveReceipt(state) {
+    const panel = document.getElementById('sharePanel');
+    resetPanel(panel);
+
+    if (!state.hasActiveSession || !state.solveReceipt) {
+        panel.hidden = true;
+        return;
+    }
+
+    panel.hidden = false;
+    panel.append(
+        createSectionHead(
+            'Solve Receipt',
+            `${state.solveReceipt.problemTitle} • ${state.solveReceipt.sourceLabel}`,
+        ),
         createButtonRow([
             createButton({
-                label: 'Open On LeetCode',
+                label: 'Share',
                 className: 'button-primary',
-                id: 'openChallengeButton',
-                onClick: () => {
-                    window.open(challenge.url, '_blank', 'noopener,noreferrer');
+                onClick: async () => {
+                    try {
+                        await shareReceipt(state);
+                        setMessage('Receipt shared.', true);
+                    } catch (error) {
+                        await navigator.clipboard.writeText(createSolveShareText(state.solveReceipt));
+                        setMessage(`Receipt text copied. ${error.message}`, true);
+                    }
                 },
             }),
             createButton({
-                label: 'Get Another',
+                label: 'Copy text',
                 className: 'button-secondary',
-                id: 'refreshChallengeButton',
-                onClick: () => startChallenge(true),
+                onClick: async () => {
+                    await navigator.clipboard.writeText(createSolveShareText(state.solveReceipt));
+                    setMessage('Receipt text copied.', true);
+                },
+            }),
+            createButton({
+                label: 'Copy image',
+                className: 'button-secondary',
+                onClick: async () => {
+                    try {
+                        await copyReceiptImage(state);
+                        setMessage('Receipt image copied.', true);
+                    } catch (error) {
+                        setMessage(error.message);
+                    }
+                },
             }),
         ]),
     );
@@ -373,6 +567,20 @@ function renderControls(state) {
         }),
     );
 
+    const pauseButton = createButton({
+        label: state.isPaused ? 'Resume Dorso' : 'Pause Dorso',
+        className: 'button-primary',
+        id: 'pauseButton',
+        onClick: async () => {
+            await sendRuntimeMessage({
+                action: MESSAGE_ACTIONS.SET_PAUSED,
+                isPaused: !state.isPaused,
+            });
+            await loadState();
+        },
+    });
+    pauseButton.disabled = Boolean(state.aiFast?.active);
+
     panel.append(
         createSectionHead(
             'Controls',
@@ -380,18 +588,7 @@ function renderControls(state) {
         ),
         createElement('div', { className: 'field-grid' }),
         createButtonRow([
-            createButton({
-                label: state.isPaused ? 'Resume Dorso' : 'Pause Dorso',
-                className: 'button-primary',
-                id: 'pauseButton',
-                onClick: async () => {
-                    await sendRuntimeMessage({
-                        action: MESSAGE_ACTIONS.SET_PAUSED,
-                        isPaused: !state.isPaused,
-                    });
-                    await loadState();
-                },
-            }),
+            pauseButton,
             createButton({
                 label: 'Clear Message',
                 className: 'button-secondary',
@@ -404,6 +601,149 @@ function renderControls(state) {
         ]),
     );
     panel.querySelector('.field-grid').append(durationLabel, bypassLabel, healthLabel);
+
+    if (state.aiFast?.active) {
+        panel.append(createElement('p', {
+            className: 'small',
+            text: 'AI fast is active. Pause and emergency bypass are unavailable.',
+        }));
+    }
+}
+
+function renderAiFast(state) {
+    const panel = document.getElementById('fastPanel');
+    resetPanel(panel);
+
+    const aiFast = state.aiFast || {};
+    const durationSelect = createElement('select');
+    AI_FAST_DURATION_HOURS.forEach((hours) => {
+        const option = createElement('option', { text: hours === 24 ? '24h' : `${Math.round(hours / 24)}d` });
+        option.value = String(hours);
+        durationSelect.append(option);
+    });
+    durationSelect.value = String(aiFast.durationHours || 24);
+
+    const durationLabel = createElement('label', { className: 'field-label' });
+    durationLabel.append(createElement('span', { text: 'Duration' }), durationSelect);
+    const summary = aiFast.plannedSummary || { solves: 0, drillsCompleted: 0 };
+    const details = createElement('div', { className: 'list' });
+    details.append(
+        createElement('div', {
+            className: 'list-item',
+            text: aiFast.active
+                ? `Ends ${new Date(aiFast.endsAt).toLocaleString()} (${formatDuration(aiFast.remainingMs)} remaining)`
+                : (aiFast.startedAt ? `Last fast ended ${new Date(aiFast.endsAt).toLocaleString()}` : 'No AI fast recorded.'),
+        }),
+        createElement('div', {
+            className: 'list-item',
+            text: `Solves ${summary.solves || 0} | Drills ${summary.drillsCompleted || 0}`,
+        }),
+    );
+
+    const buttons = [];
+    if (!aiFast.active) {
+        buttons.push(createButton({
+            label: 'Start AI Fast',
+            className: 'button-primary',
+            onClick: async () => {
+                await sendRuntimeMessage({
+                    action: MESSAGE_ACTIONS.START_AI_FAST,
+                    durationHours: Number(durationSelect.value),
+                });
+                await loadState();
+            },
+        }));
+    }
+
+    if (aiFast.startedAt && !aiFast.active) {
+        buttons.push(createButton({
+            label: 'Export ICS',
+            className: 'button-secondary',
+            onClick: async () => {
+                const result = await sendRuntimeMessage({ action: MESSAGE_ACTIONS.EXPORT_AI_FAST_ICS });
+                setMessage(result.success ? 'AI fast calendar exported.' : result.error, Boolean(result.success));
+                await loadState();
+            },
+        }));
+    }
+
+    panel.append(
+        createSectionHead(
+            'AI Fast',
+            aiFast.active ? 'Emergency bypass and pause are locked until the fast ends.' : 'Start a 24h, 7d, or 30d AI fast.',
+        ),
+        durationLabel,
+        details,
+        createButtonRow(buttons),
+    );
+}
+
+function renderCliExport(state) {
+    const panel = document.getElementById('cliPanel');
+    resetPanel(panel);
+
+    const form = createElement('form', { className: 'form-grid' });
+    const enabledLabel = createElement('label', { className: 'checkbox-card' });
+    const enabledCheckbox = createElement('input', { type: 'checkbox' });
+    const pathLabel = createElement('label', { className: 'field-label' });
+    const pathInput = createElement('input', { type: 'text' });
+    const statusText = createElement('span', { className: 'small' });
+
+    enabledCheckbox.name = 'cliStatusExportEnabled';
+    enabledCheckbox.checked = Boolean(state.cliStatusExportEnabled);
+    pathInput.name = 'cliStatusExportPath';
+    pathInput.value = state.cliStatusExportPath || DEFAULT_CLI_STATUS_EXPORT_PATH;
+    pathInput.placeholder = DEFAULT_CLI_STATUS_EXPORT_PATH;
+    statusText.textContent = state.cliStatusExportError
+        ? `Last error: ${state.cliStatusExportError}`
+        : `Last export: ${state.cliStatusLastExportedAt ? new Date(state.cliStatusLastExportedAt).toLocaleString() : 'never'}`;
+
+    enabledLabel.append(enabledCheckbox, createElement('span', { text: 'Write CLI status JSON' }));
+    pathLabel.append(
+        createElement('span', { text: 'Downloads-relative path' }),
+        pathInput,
+        createElement('span', { className: 'small', text: 'Used by dorso status --path.' }),
+    );
+    form.append(
+        enabledLabel,
+        pathLabel,
+        statusText,
+        createButtonRow([
+            createButton({
+                label: 'Save CLI Export',
+                className: 'button-primary',
+                type: 'submit',
+                onClick: () => {},
+            }),
+            createButton({
+                label: 'Export Now',
+                className: 'button-secondary',
+                onClick: async () => {
+                    const result = await sendRuntimeMessage({ action: MESSAGE_ACTIONS.EXPORT_CLI_STATUS });
+                    setMessage(result.success ? 'CLI status exported.' : result.error, Boolean(result.success));
+                    await loadState();
+                },
+            }),
+        ]),
+    );
+
+    form.onsubmit = async (event) => {
+        event.preventDefault();
+        await sendRuntimeMessage({
+            action: MESSAGE_ACTIONS.SAVE_SETTINGS,
+            payload: {
+                cliStatusExportEnabled: enabledCheckbox.checked,
+                cliStatusExportPath: pathInput.value,
+            },
+        });
+        setMessage('CLI export settings saved.', true);
+        await loadState();
+    };
+
+    panel.append(createSectionHead(
+        'CLI Export',
+        'Write a local JSON status file for the dorso CLI.',
+    ), form);
 }
 
 function renderSupportedSites(state) {
@@ -449,11 +789,262 @@ function renderSupportedSites(state) {
     };
 }
 
+function renderSources(state) {
+    const form = document.getElementById('sourcesForm');
+    const enabledSources = new Set(state.enabledSources || []);
+    resetPanel(form);
+
+    const checkboxGrid = createElement('div', { className: 'checkbox-grid' });
+    state.supportedSources.forEach((source) => {
+        const label = createElement('label', { className: 'checkbox-card' });
+        const checkbox = createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.name = 'enabledSources';
+        checkbox.value = source.id;
+        checkbox.checked = enabledSources.has(source.id);
+        checkbox.disabled = !source.isAvailable;
+        label.append(checkbox, createElement('span', {
+            text: source.isAvailable ? source.label : `${source.label} (coming soon)`,
+        }));
+        checkboxGrid.append(label);
+    });
+
+    form.append(
+        checkboxGrid,
+        createButton({
+            label: 'Save Sources',
+            className: 'button-primary',
+            type: 'submit',
+            onClick: () => {},
+        }),
+    );
+
+    form.onsubmit = async (event) => {
+        event.preventDefault();
+        const formData = new FormData(form);
+        const enabledSourcesValue = formData.getAll('enabledSources');
+
+        await sendRuntimeMessage({
+            action: MESSAGE_ACTIONS.SAVE_SETTINGS,
+            payload: {
+                enabledSources: enabledSourcesValue,
+            },
+        });
+        setMessage('Challenge sources saved.', true);
+        await loadState();
+    };
+}
+
+function renderTargetRules(state) {
+    const form = document.getElementById('rulesForm');
+    const availableSources = state.supportedSources
+        .filter((source) => source.isAvailable)
+        .map((source) => source.id);
+    resetPanel(form);
+
+    const list = createElement('div', { className: 'list' });
+    state.supportedTargets.forEach((target) => {
+        const origin = getTargetOrigin(target);
+        const rule = normalizeTargetRule(state.perTargetRules?.[origin], availableSources);
+        const row = createElement('div', { className: 'list-item target-rule-row' });
+        const controls = createElement('div', { className: 'rule-grid' });
+        const scheduleSelect = createSelect(
+            `${origin}::schedule`,
+            rule.schedule,
+            TARGET_RULE_SCHEDULES,
+            scheduleLabels,
+        );
+        const customLabel = createElement('label', { className: 'field-label' });
+        const customInput = createElement('input', { type: 'text' });
+        const difficultySelect = createSelect(
+            `${origin}::difficultyOverride`,
+            rule.difficultyOverride,
+            TARGET_RULE_DIFFICULTIES,
+            difficultyLabels,
+        );
+        const scheduleLabel = createElement('label', { className: 'field-label' });
+        const difficultyLabel = createElement('label', { className: 'field-label' });
+
+        customInput.name = `${origin}::customCron`;
+        customInput.value = rule.customCron || DEFAULT_TARGET_RULE.customCron;
+        customInput.placeholder = '1-5 09:00-17:00';
+        customLabel.hidden = !['weekdays', 'custom'].includes(rule.schedule);
+        scheduleSelect.addEventListener('change', () => {
+            customLabel.hidden = !['weekdays', 'custom'].includes(scheduleSelect.value);
+        });
+
+        scheduleLabel.append(createElement('span', { text: 'Schedule' }), scheduleSelect);
+        customLabel.append(
+            createElement('span', { text: 'Custom window' }),
+            customInput,
+            createElement('span', { className: 'small', text: 'Format: 1-5 09:00-17:00; 0 is Sunday.' }),
+        );
+        difficultyLabel.append(createElement('span', { text: 'Difficulty' }), difficultySelect);
+        controls.append(scheduleLabel, customLabel, difficultyLabel);
+
+        const sourceGrid = createElement('div', { className: 'rule-source-grid' });
+        state.supportedSources.forEach((source) => {
+            const label = createElement('label', { className: 'checkbox-card' });
+            const checkbox = createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.name = `${origin}::sourcesOverride`;
+            checkbox.value = source.id;
+            checkbox.checked = rule.sourcesOverride.includes(source.id);
+            checkbox.disabled = !source.isAvailable;
+            label.append(checkbox, createElement('span', {
+                text: source.isAvailable ? source.label : `${source.label} (coming soon)`,
+            }));
+            sourceGrid.append(label);
+        });
+
+        row.append(
+            createElement('strong', { text: target.label }),
+            createElement('span', { className: 'small', text: origin }),
+            controls,
+            createElement('span', { className: 'small', text: 'Source override; leave blank to use global sources.' }),
+            sourceGrid,
+        );
+        list.append(row);
+    });
+
+    form.append(
+        list,
+        createButton({
+            label: 'Save Domain Rules',
+            className: 'button-primary',
+            type: 'submit',
+            onClick: () => {},
+        }),
+    );
+
+    form.onsubmit = async (event) => {
+        event.preventDefault();
+        const formData = new FormData(form);
+        const perTargetRules = {};
+        state.supportedTargets.forEach((target) => {
+            const origin = getTargetOrigin(target);
+            perTargetRules[origin] = {
+                schedule: formData.get(`${origin}::schedule`) || DEFAULT_TARGET_RULE.schedule,
+                customCron: formData.get(`${origin}::customCron`) || DEFAULT_TARGET_RULE.customCron,
+                difficultyOverride: formData.get(`${origin}::difficultyOverride`) || DEFAULT_TARGET_RULE.difficultyOverride,
+                sourcesOverride: formData.getAll(`${origin}::sourcesOverride`),
+            };
+        });
+
+        await sendRuntimeMessage({
+            action: MESSAGE_ACTIONS.SAVE_SETTINGS,
+            payload: { perTargetRules },
+        });
+        setMessage('Domain rules saved.', true);
+        await loadState();
+    };
+}
+
+function createOnboardingStep(title, copy) {
+    const panel = createElement('section', { className: 'panel' });
+    panel.append(createSectionHead(title, copy));
+    return panel;
+}
+
+function appendSourceCheckboxes(panel, state) {
+    const enabledSources = new Set(state.enabledSources || []);
+    const checkboxGrid = createElement('div', { className: 'checkbox-grid' });
+    state.supportedSources.forEach((source) => {
+        const label = createElement('label', { className: 'checkbox-card' });
+        const checkbox = createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.name = 'enabledSources';
+        checkbox.value = source.id;
+        checkbox.checked = enabledSources.has(source.id);
+        checkbox.disabled = !source.isAvailable;
+        label.append(checkbox, createElement('span', {
+            text: source.isAvailable ? source.label : `${source.label} (coming soon)`,
+        }));
+        checkboxGrid.append(label);
+    });
+    panel.append(checkboxGrid);
+}
+
+function appendTargetCheckboxes(panel, state) {
+    const enabledTargetIds = new Set(state.enabledTargetIds || []);
+    const checkboxGrid = createElement('div', { className: 'checkbox-grid' });
+    state.supportedTargets.forEach((target) => {
+        const label = createElement('label', { className: 'checkbox-card' });
+        const checkbox = createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.name = 'enabledTargetIds';
+        checkbox.value = target.id;
+        checkbox.checked = enabledTargetIds.has(target.id);
+        label.append(checkbox, createElement('span', { text: target.label }));
+        checkboxGrid.append(label);
+    });
+    panel.append(checkboxGrid);
+}
+
+function renderOnboarding(state) {
+    const panel = document.getElementById('onboardingPanel');
+    resetPanel(panel);
+    panel.hidden = false;
+
+    const form = createElement('form', { className: 'onboarding-grid' });
+    const sourceStep = createOnboardingStep('Pick Sources', 'Choose which challenge pools Dorso can assign.');
+    const targetStep = createOnboardingStep('Pick Sites', 'Choose which chatbot domains Dorso should protect.');
+    const receiptStep = createOnboardingStep('Sample Receipt', 'A solve receipt appears after each verified unlock.');
+    const preview = createElement('img', { className: 'receipt-preview' });
+    preview.alt = 'Sample Dorso solve receipt';
+    preview.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(renderReceiptSvg({
+        problemTitle: 'Binary Search Drill',
+        sourceLabel: 'MCQ',
+        timeToSolveMs: 184000,
+        currentRun: 3,
+        cognitiveIndex: 82,
+    }))}`;
+
+    appendSourceCheckboxes(sourceStep, state);
+    appendTargetCheckboxes(targetStep, state);
+    receiptStep.append(
+        preview,
+        createButtonRow([
+            createButton({
+                label: 'Enter Dashboard',
+                className: 'button-primary',
+                type: 'submit',
+                onClick: () => {},
+            }),
+        ]),
+    );
+
+    form.append(sourceStep, targetStep, receiptStep);
+    form.onsubmit = async (event) => {
+        event.preventDefault();
+        const formData = new FormData(form);
+        await sendRuntimeMessage({
+            action: MESSAGE_ACTIONS.SAVE_SETTINGS,
+            payload: {
+                enabledSources: formData.getAll('enabledSources'),
+                enabledTargetIds: formData.getAll('enabledTargetIds'),
+                hasCompletedOnboarding: true,
+            },
+        });
+        setMessage('Setup saved.', true);
+        await loadState();
+    };
+
+    panel.append(form);
+}
+
 function renderCorruptedStateFallback() {
-    ['statusPanel', 'challengePanel', 'controlPanel', 'badgePanel', 'disclosurePanel'].forEach((panelId) => {
+    setMainPanelsHidden(false);
+    const onboardingPanel = document.getElementById('onboardingPanel');
+    resetPanel(onboardingPanel);
+    onboardingPanel.hidden = true;
+    ['statusPanel', 'challengePanel', 'sharePanel', 'controlPanel', 'fastPanel', 'cliPanel', 'badgePanel', 'disclosurePanel'].forEach((panelId) => {
         resetPanel(document.getElementById(panelId));
     });
+    document.getElementById('sharePanel').hidden = true;
     resetPanel(document.getElementById('sitesForm'));
+    resetPanel(document.getElementById('sourcesForm'));
+    resetPanel(document.getElementById('rulesForm'));
     setMessage('');
 
     const panel = document.getElementById('statusPanel');
@@ -515,6 +1106,75 @@ async function renderBadge(state) {
             }),
         ]),
     );
+
+    const leaderboardForm = createElement('form', { className: 'form-grid' });
+    const repoLabel = createElement('label', { className: 'field-label' });
+    const repoInput = createElement('input', { type: 'text' });
+    repoInput.value = state.leaderboardRepoUrl || '';
+    repoInput.placeholder = 'https://github.com/user/repo';
+    repoLabel.append(
+        createElement('span', { text: 'Leaderboard repo URL' }),
+        repoInput,
+        createElement('span', { className: 'small', text: 'Opt-in; Dorso posts only anonymous hashes and score fields.' }),
+    );
+    leaderboardForm.append(
+        repoLabel,
+        createButtonRow([
+            createButton({
+                label: 'Submit Score',
+                className: 'button-primary',
+                type: 'submit',
+                onClick: () => {},
+            }),
+        ]),
+    );
+    leaderboardForm.onsubmit = async (event) => {
+        event.preventDefault();
+        try {
+            const submission = await createLeaderboardSubmission({
+                dashboardState: state,
+                repoUrl: repoInput.value,
+                secret: config.hmacSecret,
+                baseUrl: config.baseUrl,
+            });
+            if (!submission.available) {
+                throw new Error(submission.reason);
+            }
+
+            const endpointOrigin = new URL(submission.endpoint).origin;
+            const granted = await requestOptionalHostPermission(endpointOrigin);
+            if (!granted) {
+                throw new Error('Leaderboard host permission was not granted.');
+            }
+
+            const response = await fetch(submission.endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-dorso-signature': submission.sig,
+                },
+                body: submission.body,
+            });
+            if (!response.ok) {
+                throw new Error(`Leaderboard submit failed: HTTP ${response.status}`);
+            }
+
+            await sendRuntimeMessage({
+                action: MESSAGE_ACTIONS.SAVE_SETTINGS,
+                payload: {
+                    leaderboardRepoUrl: repoInput.value,
+                },
+            });
+            setMessage('Leaderboard score submitted.', true);
+            await loadState();
+        } catch (error) {
+            setMessage(error.message || 'Leaderboard submit failed.');
+        }
+    };
+    panel.append(createSectionHead(
+        'Leaderboard',
+        'Opt in to a public repo-scoped leaderboard.',
+    ), leaderboardForm);
 }
 
 function renderDisclosure(entries = []) {
@@ -533,7 +1193,7 @@ function renderDisclosure(entries = []) {
         },
         {
             title: 'Official problem pages',
-            copy: 'Dorso links to LeetCode directly instead of rehosting third-party problem statements inside the extension.',
+            copy: 'Dorso links to official challenge pages instead of rehosting third-party problem statements inside the extension.',
         },
     ].forEach((item) => {
         const row = createElement('div', { className: 'list-item' });
@@ -641,12 +1301,29 @@ async function loadState() {
     latestState = response.state;
     latestWhatIAsked = await getWhatIAskedEntries();
 
+    if (!latestState.hasCompletedOnboarding) {
+        clearTimers();
+        setMessage('');
+        setMainPanelsHidden(true);
+        renderOnboarding(latestState);
+        return;
+    }
+
+    const onboardingPanel = document.getElementById('onboardingPanel');
+    resetPanel(onboardingPanel);
+    onboardingPanel.hidden = true;
+    setMainPanelsHidden(false);
     setMessage(latestState.uiMessage || latestState.leetcodeDetectionWarning, latestState.hasActiveSession && !latestState.leetcodeDetectionWarning);
     renderStatus(latestState);
     renderChallenge(latestState);
+    renderSolveReceipt(latestState);
     renderControls(latestState);
+    renderAiFast(latestState);
+    renderCliExport(latestState);
     await renderBadge(latestState);
+    renderSources(latestState);
     renderSupportedSites(latestState);
+    renderTargetRules(latestState);
     renderDisclosure(latestWhatIAsked);
 }
 

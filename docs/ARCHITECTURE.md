@@ -8,6 +8,7 @@
 - `src/extension/lib/`: browser/runtime helpers and local SVG renderers.
 - `src/shared/core/`: constants, provider contracts, scoring, and streak logic shared by build targets.
 - `src/shared/data/`: bundled challenge packs.
+- `cli/`: standalone `@dorso/cli` package that reads local status JSON exports.
 - `schemas/`: JSON Schemas for community challenge packs.
 - `cloudflare/`: optional stateless SVG badge Worker.
 - `scripts/`: extension build and Safari wrapper sync scripts.
@@ -44,6 +45,31 @@ flowchart TD
     G --> H{signature and age valid?}
     H -->|yes| I[cacheable SVG badge]
     H -->|no| J[error response]
+```
+
+## CLI Flow
+
+```mermaid
+flowchart TD
+    A[popup enables CLI export] --> B[background stores Downloads-relative path]
+    B --> C[chrome.alarms periodic tick]
+    C --> D[background builds status snapshot]
+    D --> E[chrome.downloads overwrites JSON export]
+    E --> F[dorso status reads local file]
+    F --> G[human, JSON, or prompt output]
+```
+
+## Leaderboard Flow
+
+```mermaid
+flowchart TD
+    A[popup repo URL input] --> B[hash repo URL locally]
+    B --> C[build anonymous score payload]
+    C --> D[request optional Dorso host permission]
+    D --> E[POST signed payload to Worker]
+    E --> F[Worker verifies HMAC]
+    F --> G[KV top-50 rows per repo hash]
+    G --> H[GET leaderboard JSON]
 ```
 
 ## Storage

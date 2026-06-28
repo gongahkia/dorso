@@ -106,10 +106,22 @@ export const CHATBOT_DIFFICULTY_MAP = {
 };
 
 export const SOURCE_LABELS = {
+    mcq: 'MCQ',
+    drills: 'Drills',
     leetcode: 'LeetCode',
+    aoc: 'Advent of Code',
+    euler: 'Project Euler',
 };
 
-export const DEFAULT_ENABLED_SOURCES = ['leetcode'];
+export const CHALLENGE_SOURCES = [
+    { id: 'mcq', label: SOURCE_LABELS.mcq },
+    { id: 'drills', label: SOURCE_LABELS.drills },
+    { id: 'leetcode', label: SOURCE_LABELS.leetcode },
+    { id: 'aoc', label: SOURCE_LABELS.aoc },
+    { id: 'euler', label: SOURCE_LABELS.euler },
+];
+
+export const DEFAULT_ENABLED_SOURCES = ['mcq', 'drills'];
 
 export const LOCAL_CHALLENGES = [
     { slug: 'two-sum', title: 'Two Sum', difficulty: 'Easy', topic_tags: ['Array', 'Hash Table'] },
@@ -133,9 +145,18 @@ export const STORAGE_KEYS = {
     LAST_SOLVED_TIME: 'lastSolvedTime',
     CURRENT_CHALLENGE: 'currentChallenge',
     CHALLENGE_STARTED_AT: 'challengeStartedAt',
+    LAST_SOLVE_RECEIPT: 'lastSolveReceipt',
     RECENT_CHALLENGE_SLUGS: 'recentChallengeSlugs',
     STREAK_STATE: 'streakState',
     ENABLED_TARGET_IDS: 'enabledTargetIds',
+    ENABLED_SOURCES: 'ENABLED_SOURCES',
+    PER_TARGET_RULES: 'PER_TARGET_RULES',
+    CLI_STATUS_EXPORT_ENABLED: 'CLI_STATUS_EXPORT_ENABLED',
+    CLI_STATUS_EXPORT_PATH: 'CLI_STATUS_EXPORT_PATH',
+    CLI_STATUS_LAST_EXPORTED_AT: 'CLI_STATUS_LAST_EXPORTED_AT',
+    CLI_STATUS_EXPORT_ERROR: 'CLI_STATUS_EXPORT_ERROR',
+    AI_FAST: 'AI_FAST',
+    LEADERBOARD_REPO_URL: 'LEADERBOARD_REPO_URL',
     SESSION_DURATION_MS_PREF: 'SESSION_DURATION_MS_PREF',
     EMERGENCY_BYPASSES_PER_WEEK: 'EMERGENCY_BYPASSES_PER_WEEK',
     BYPASS_WEEK_START: 'BYPASS_WEEK_START',
@@ -144,6 +165,7 @@ export const STORAGE_KEYS = {
     LAST_LC_SUBMISSION_TIMESTAMP: 'LAST_LC_SUBMISSION_TIMESTAMP',
     MESSAGE_FAILURE_COUNT: 'messageFailureCount',
     IS_PAUSED: 'isPaused',
+    ONBOARDING_COMPLETED: 'onboardingCompleted',
     UI_MESSAGE: 'uiMessage',
 };
 
@@ -153,6 +175,9 @@ export const MESSAGE_ACTIONS = {
     SAVE_SETTINGS: 'saveSettings',
     SET_PAUSED: 'setPaused',
     EMERGENCY_BYPASS: 'emergencyBypass',
+    EXPORT_CLI_STATUS: 'exportCliStatus',
+    START_AI_FAST: 'startAiFast',
+    EXPORT_AI_FAST_ICS: 'exportAiFastIcs',
     SUBMISSION_RESULT: 'submissionResult',
     CLEAR_UI_MESSAGE: 'clearUiMessage',
 };

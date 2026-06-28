@@ -1,4 +1,5 @@
 import {
+    CHALLENGE_SOURCES,
     CHATBOT_TARGETS,
     DEFAULT_ENABLED_SOURCES,
     INSTALL_ID_PREFIX,
@@ -8,23 +9,50 @@ import {
     SESSION_DURATION_MINUTES,
     STORAGE_KEYS,
     getChatbotDifficultyByUrl,
+    getChatbotTargetByUrl,
     getDefaultEnabledTargetIds,
 } from '../../shared/core/constants.js';
+import {
+    DEFAULT_AI_FAST_STATE,
+    createAiFastCalendar,
+    createAiFastState,
+    normalizeAiFastState,
+    recordAiFastSolve,
+} from '../../shared/core/ai-fast.js';
+import {
+    DEFAULT_CLI_STATUS_EXPORT_PATH,
+    createCliStatusSnapshot,
+    normalizeCliStatusExportPath,
+} from '../../shared/core/cli-status.js';
 import {
     getEmergencyBypassState,
     normalizeEmergencyBypassLimit,
 } from '../../shared/core/emergency-bypass.js';
 import {
+    getTargetOrigin,
+    normalizePerTargetRules,
+} from '../../shared/core/target-rules.js';
+import {
     createStreakState,
     normalizeStreakState,
     recordSolve,
 } from '../../shared/core/streak.js';
+import drillsProvider from '../lib/providers/drills-provider.js';
+import eulerProvider from '../lib/providers/euler-provider.js';
 import leetcodeProvider from '../lib/providers/leetcode-provider.js';
+import mcqProvider from '../lib/providers/mcq-provider.js';
 
 (function backgroundWorker() {
     const browserApi = globalThis.browser ?? globalThis.chrome;
     const RECENT_CHALLENGE_WINDOW = 5;
     const LEETCODE_STALENESS_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+    const CLI_STATUS_EXPORT_ALARM = 'dorso-cli-status-export';
+    const providers = {
+        mcq: mcqProvider,
+        drills: drillsProvider,
+        leetcode: leetcodeProvider,
+        euler: eulerProvider,
+    };
     let ensureInstallStatePromise = null;
 
     function isPromise(value) {
@@ -72,6 +100,18 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
         return isPromise(response)
             ? response
             : callbackToPromise((done) => browserApi.storage.local.remove(keys, done));
+    }
+
+    async function downloadUrl(options) {
+        if (!browserApi.downloads?.download) {
+            throw new Error('Downloads API unavailable.');
+        }
+
+        if (globalThis.browser?.downloads?.download) {
+            return globalThis.browser.downloads.download(options);
+        }
+
+        return callbackToPromise((done) => browserApi.downloads.download(options, done));
     }
 
     async function sha256Hex(value) {
@@ -124,19 +164,97 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
             .filter(Boolean);
     }
 
+    function getSupportedSources() {
+        return CHALLENGE_SOURCES.map((source) => ({
+            ...source,
+            isAvailable: Boolean(providers[source.id]),
+        }));
+    }
+
+    function getAllowedEnabledSources(value = DEFAULT_ENABLED_SOURCES) {
+        const requestedSources = Array.isArray(value) ? value : DEFAULT_ENABLED_SOURCES;
+        const enabledSources = requestedSources.filter((sourceId) => providers[sourceId]);
+        return enabledSources.length
+            ? [...new Set(enabledSources)]
+            : DEFAULT_ENABLED_SOURCES.filter((sourceId) => providers[sourceId]);
+    }
+
+    function getAllowedTargetRules(value = {}) {
+        return normalizePerTargetRules(value, {
+            targets: CHATBOT_TARGETS,
+            availableSources: Object.keys(providers),
+        });
+    }
+
+    function getChallengeSourcesForRule(rule, enabledSources) {
+        return rule?.sourcesOverride?.length
+            ? getAllowedEnabledSources(rule.sourcesOverride)
+            : getAllowedEnabledSources(enabledSources);
+    }
+
+    function getChallengeDifficultyForRule(rule, targetUrl) {
+        return rule?.difficultyOverride && rule.difficultyOverride !== 'default'
+            ? rule.difficultyOverride
+            : getChatbotDifficultyByUrl(targetUrl);
+    }
+
+    function getChallengeProfile(stored, targetUrl) {
+        const perTargetRules = getAllowedTargetRules(stored[STORAGE_KEYS.PER_TARGET_RULES]);
+        const target = getChatbotTargetByUrl(targetUrl);
+        const targetOrigin = target ? getTargetOrigin(target) : '';
+        const rule = targetOrigin ? perTargetRules[targetOrigin] : null;
+        const enabledSources = getChallengeSourcesForRule(rule, stored[STORAGE_KEYS.ENABLED_SOURCES]);
+        const difficulty = getChallengeDifficultyForRule(rule, targetUrl);
+        return {
+            targetOrigin,
+            ruleSignature: JSON.stringify({
+                targetOrigin,
+                enabledSources,
+                difficulty,
+            }),
+            enabledSources,
+            difficulty,
+        };
+    }
+
+    function syncCliStatusExportAlarm(enabled) {
+        if (!browserApi.alarms?.create) {
+            return;
+        }
+
+        if (enabled) {
+            browserApi.alarms.create(CLI_STATUS_EXPORT_ALARM, { periodInMinutes: 1 });
+            return;
+        }
+
+        browserApi.alarms.clear?.(CLI_STATUS_EXPORT_ALARM);
+    }
+
     async function ensureInstallStateInner() {
         const stored = await getStorageValues([
             STORAGE_KEYS.INSTALL_ID,
             STORAGE_KEYS.FIRST_STORAGE_WRITE_TIMESTAMP,
             STORAGE_KEYS.ENABLED_TARGET_IDS,
+            STORAGE_KEYS.ENABLED_SOURCES,
+            STORAGE_KEYS.PER_TARGET_RULES,
+            STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED,
+            STORAGE_KEYS.CLI_STATUS_EXPORT_PATH,
+            STORAGE_KEYS.CLI_STATUS_LAST_EXPORTED_AT,
+            STORAGE_KEYS.CLI_STATUS_EXPORT_ERROR,
+            STORAGE_KEYS.AI_FAST,
+            STORAGE_KEYS.LEADERBOARD_REPO_URL,
             STORAGE_KEYS.SESSION_DURATION_MS_PREF,
             STORAGE_KEYS.EMERGENCY_BYPASSES_PER_WEEK,
             STORAGE_KEYS.BYPASS_WEEK_START,
             STORAGE_KEYS.BYPASSES_USED_THIS_WEEK,
             STORAGE_KEYS.STREAK_STATE,
             STORAGE_KEYS.IS_PAUSED,
+            STORAGE_KEYS.ONBOARDING_COMPLETED,
         ]);
         const updates = {};
+        const hasExistingInstallState = Boolean(
+            stored[STORAGE_KEYS.INSTALL_ID] || stored[STORAGE_KEYS.FIRST_STORAGE_WRITE_TIMESTAMP],
+        );
         const emergencyBypassState = getEmergencyBypassState({
             limit: stored[STORAGE_KEYS.EMERGENCY_BYPASSES_PER_WEEK],
             weekStart: stored[STORAGE_KEYS.BYPASS_WEEK_START],
@@ -151,6 +269,34 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
 
         if (!Array.isArray(stored[STORAGE_KEYS.ENABLED_TARGET_IDS])) {
             updates[STORAGE_KEYS.ENABLED_TARGET_IDS] = getDefaultEnabledTargetIds();
+        }
+
+        if (!Array.isArray(stored[STORAGE_KEYS.ENABLED_SOURCES])) {
+            updates[STORAGE_KEYS.ENABLED_SOURCES] = getAllowedEnabledSources();
+        }
+
+        if (!stored[STORAGE_KEYS.PER_TARGET_RULES] || typeof stored[STORAGE_KEYS.PER_TARGET_RULES] !== 'object') {
+            updates[STORAGE_KEYS.PER_TARGET_RULES] = getAllowedTargetRules();
+        }
+
+        if (typeof stored[STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED] !== 'boolean') {
+            updates[STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED] = false;
+        }
+
+        if (typeof stored[STORAGE_KEYS.CLI_STATUS_EXPORT_PATH] !== 'string') {
+            updates[STORAGE_KEYS.CLI_STATUS_EXPORT_PATH] = DEFAULT_CLI_STATUS_EXPORT_PATH;
+        }
+
+        if (typeof stored[STORAGE_KEYS.CLI_STATUS_EXPORT_ERROR] !== 'string') {
+            updates[STORAGE_KEYS.CLI_STATUS_EXPORT_ERROR] = '';
+        }
+
+        if (!stored[STORAGE_KEYS.AI_FAST] || typeof stored[STORAGE_KEYS.AI_FAST] !== 'object') {
+            updates[STORAGE_KEYS.AI_FAST] = DEFAULT_AI_FAST_STATE;
+        }
+
+        if (typeof stored[STORAGE_KEYS.LEADERBOARD_REPO_URL] !== 'string') {
+            updates[STORAGE_KEYS.LEADERBOARD_REPO_URL] = '';
         }
 
         if (!SESSION_DURATION_MS_OPTIONS.includes(stored[STORAGE_KEYS.SESSION_DURATION_MS_PREF])) {
@@ -177,9 +323,19 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
             updates[STORAGE_KEYS.IS_PAUSED] = false;
         }
 
+        if (typeof stored[STORAGE_KEYS.ONBOARDING_COMPLETED] !== 'boolean') {
+            updates[STORAGE_KEYS.ONBOARDING_COMPLETED] = hasExistingInstallState;
+        }
+
         if (Object.keys(updates).length > 0) {
             await setStorageValues(updates);
         }
+
+        syncCliStatusExportAlarm(Boolean(
+            Object.prototype.hasOwnProperty.call(updates, STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED)
+                ? updates[STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED]
+                : stored[STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED],
+        ));
     }
 
     async function ensureInstallState() {
@@ -234,9 +390,18 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
             STORAGE_KEYS.INSTALL_ID,
             STORAGE_KEYS.CURRENT_CHALLENGE,
             STORAGE_KEYS.CHALLENGE_STARTED_AT,
+            STORAGE_KEYS.LAST_SOLVE_RECEIPT,
             STORAGE_KEYS.RECENT_CHALLENGE_SLUGS,
             STORAGE_KEYS.STREAK_STATE,
             STORAGE_KEYS.ENABLED_TARGET_IDS,
+            STORAGE_KEYS.ENABLED_SOURCES,
+            STORAGE_KEYS.PER_TARGET_RULES,
+            STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED,
+            STORAGE_KEYS.CLI_STATUS_EXPORT_PATH,
+            STORAGE_KEYS.CLI_STATUS_LAST_EXPORTED_AT,
+            STORAGE_KEYS.CLI_STATUS_EXPORT_ERROR,
+            STORAGE_KEYS.AI_FAST,
+            STORAGE_KEYS.LEADERBOARD_REPO_URL,
             STORAGE_KEYS.SESSION_DURATION_MS_PREF,
             STORAGE_KEYS.EMERGENCY_BYPASSES_PER_WEEK,
             STORAGE_KEYS.BYPASS_WEEK_START,
@@ -245,12 +410,13 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
             STORAGE_KEYS.FIRST_STORAGE_WRITE_TIMESTAMP,
             STORAGE_KEYS.MESSAGE_FAILURE_COUNT,
             STORAGE_KEYS.IS_PAUSED,
+            STORAGE_KEYS.ONBOARDING_COMPLETED,
             STORAGE_KEYS.UI_MESSAGE,
         ]);
     }
 
     function getLeetCodeDetectionWarning(stored) {
-        if (!DEFAULT_ENABLED_SOURCES.includes('leetcode')) {
+        if (!getAllowedEnabledSources(stored[STORAGE_KEYS.ENABLED_SOURCES]).includes('leetcode')) {
             return '';
         }
 
@@ -266,34 +432,46 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
 
     async function persistChallenge(force, targetUrl) {
         const stored = await getStoredState();
-        if (stored[STORAGE_KEYS.CURRENT_CHALLENGE] && !force) {
+        const challengeProfile = getChallengeProfile(stored, targetUrl);
+        if (
+            stored[STORAGE_KEYS.CURRENT_CHALLENGE]
+            && !force
+            && stored[STORAGE_KEYS.CURRENT_CHALLENGE].targetOrigin === challengeProfile.targetOrigin
+            && stored[STORAGE_KEYS.CURRENT_CHALLENGE].ruleSignature === challengeProfile.ruleSignature
+        ) {
             return stored[STORAGE_KEYS.CURRENT_CHALLENGE];
         }
 
         const recentSlugs = normalizeRecentChallengeSlugs(stored[STORAGE_KEYS.RECENT_CHALLENGE_SLUGS]);
-        const challenge = await leetcodeProvider.getChallenge({
+        const provider = providers[challengeProfile.enabledSources[Math.floor(Math.random() * challengeProfile.enabledSources.length)]];
+        const challenge = await provider.getChallenge({
             recentSlugs,
-            difficulty: getChatbotDifficultyByUrl(targetUrl),
+            difficulty: challengeProfile.difficulty,
         });
+        const storedChallenge = {
+            ...challenge,
+            targetOrigin: challengeProfile.targetOrigin,
+            ruleSignature: challengeProfile.ruleSignature,
+        };
         const nextRecentSlugs = [
             {
-                source: challenge.source,
-                slug: challenge.slug,
+                source: storedChallenge.source,
+                slug: storedChallenge.slug,
                 timestamp: Date.now(),
             },
             ...recentSlugs.filter((entry) => {
-                return entry.source !== challenge.source || entry.slug !== challenge.slug;
+                return entry.source !== storedChallenge.source || entry.slug !== storedChallenge.slug;
             }),
         ].slice(0, RECENT_CHALLENGE_WINDOW);
 
         await setStorageValues({
-            [STORAGE_KEYS.CURRENT_CHALLENGE]: challenge,
+            [STORAGE_KEYS.CURRENT_CHALLENGE]: storedChallenge,
             [STORAGE_KEYS.CHALLENGE_STARTED_AT]: Date.now(),
             [STORAGE_KEYS.RECENT_CHALLENGE_SLUGS]: nextRecentSlugs,
             [STORAGE_KEYS.UI_MESSAGE]: '',
         });
 
-        return challenge;
+        return storedChallenge;
     }
 
     async function clearChallenge(message) {
@@ -312,8 +490,7 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
         ]);
     }
 
-    async function startSession(durationMs = null) {
-        const now = Date.now();
+    async function startSession(durationMs = null, now = Date.now()) {
         const sessionDurationMs = durationMs || getValidSessionDurationMs(await getStorageValue(STORAGE_KEYS.SESSION_DURATION_MS_PREF));
         await setStorageValues({
             [STORAGE_KEYS.LAST_SOLVED_TIME]: now,
@@ -330,25 +507,37 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
             used: stored[STORAGE_KEYS.BYPASSES_USED_THIS_WEEK],
         });
         const streakState = normalizeStreakState(stored[STORAGE_KEYS.STREAK_STATE]);
+        const aiFast = normalizeAiFastState(stored[STORAGE_KEYS.AI_FAST]);
 
         return {
             installId: stored[STORAGE_KEYS.INSTALL_ID] || null,
             hasActiveSession: await hasActiveSession(),
             session: await getSessionInfo(),
             currentChallenge: stored[STORAGE_KEYS.CURRENT_CHALLENGE] || null,
+            solveReceipt: stored[STORAGE_KEYS.LAST_SOLVE_RECEIPT] || null,
             enabledTargetIds: stored[STORAGE_KEYS.ENABLED_TARGET_IDS] || getDefaultEnabledTargetIds(),
+            enabledSources: getAllowedEnabledSources(stored[STORAGE_KEYS.ENABLED_SOURCES]),
+            perTargetRules: getAllowedTargetRules(stored[STORAGE_KEYS.PER_TARGET_RULES]),
+            cliStatusExportEnabled: Boolean(stored[STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED]),
+            cliStatusExportPath: normalizeCliStatusExportPath(stored[STORAGE_KEYS.CLI_STATUS_EXPORT_PATH]),
+            cliStatusLastExportedAt: stored[STORAGE_KEYS.CLI_STATUS_LAST_EXPORTED_AT] || null,
+            cliStatusExportError: stored[STORAGE_KEYS.CLI_STATUS_EXPORT_ERROR] || '',
+            aiFast,
+            leaderboardRepoUrl: stored[STORAGE_KEYS.LEADERBOARD_REPO_URL] || '',
             sessionDurationMinutes: getSessionDurationMinutes(
                 stored[STORAGE_KEYS.SESSION_DURATION_MS_PREF] || SESSION_DURATION_MINUTES * 60 * 1000,
             ),
             emergencyBypassesPerWeek: emergencyBypassState.limit,
             bypassesThisWeek: emergencyBypassState.used,
-            emergencyBypassesRemaining: emergencyBypassState.remaining,
+            emergencyBypassesRemaining: aiFast.active ? 0 : emergencyBypassState.remaining,
             bypassWeekStart: emergencyBypassState.weekStart,
             currentRun: streakState.currentRun,
             longestRun: streakState.longestRun,
             graceDaysRemaining: streakState.graceDaysRemaining,
             isPaused: Boolean(stored[STORAGE_KEYS.IS_PAUSED]),
+            hasCompletedOnboarding: Boolean(stored[STORAGE_KEYS.ONBOARDING_COMPLETED]),
             supportedTargets: CHATBOT_TARGETS,
+            supportedSources: getSupportedSources(),
             uiMessage: stored[STORAGE_KEYS.UI_MESSAGE] || '',
             messageFailureCount: Number(stored[STORAGE_KEYS.MESSAGE_FAILURE_COUNT] || 0),
             leetcodeDetectionWarning: getLeetCodeDetectionWarning(stored),
@@ -357,14 +546,47 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
 
     async function saveSettings(payload) {
         const updates = {};
+        let cliStatusSettingsChanged = false;
 
         if (Array.isArray(payload?.enabledTargetIds)) {
             const allowedTargetIds = new Set(CHATBOT_TARGETS.map((target) => target.id));
             updates[STORAGE_KEYS.ENABLED_TARGET_IDS] = payload.enabledTargetIds.filter((targetId) => allowedTargetIds.has(targetId));
         }
 
+        if (Array.isArray(payload?.enabledSources)) {
+            updates[STORAGE_KEYS.ENABLED_SOURCES] = getAllowedEnabledSources(payload.enabledSources);
+        }
+
+        if (payload?.perTargetRules && typeof payload.perTargetRules === 'object') {
+            updates[STORAGE_KEYS.PER_TARGET_RULES] = getAllowedTargetRules(payload.perTargetRules);
+        }
+
+        if (typeof payload?.cliStatusExportEnabled === 'boolean') {
+            updates[STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED] = payload.cliStatusExportEnabled;
+            cliStatusSettingsChanged = true;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(payload || {}, 'cliStatusExportPath')) {
+            updates[STORAGE_KEYS.CLI_STATUS_EXPORT_PATH] = normalizeCliStatusExportPath(payload.cliStatusExportPath);
+            cliStatusSettingsChanged = true;
+        }
+
         if (typeof payload?.isPaused === 'boolean') {
-            updates[STORAGE_KEYS.IS_PAUSED] = payload.isPaused;
+            const aiFast = normalizeAiFastState(await getStorageValue(STORAGE_KEYS.AI_FAST));
+            if (aiFast.active && payload.isPaused) {
+                updates[STORAGE_KEYS.IS_PAUSED] = false;
+                updates[STORAGE_KEYS.UI_MESSAGE] = 'AI fast is active. Pause is unavailable.';
+            } else {
+                updates[STORAGE_KEYS.IS_PAUSED] = payload.isPaused;
+            }
+        }
+
+        if (typeof payload?.hasCompletedOnboarding === 'boolean') {
+            updates[STORAGE_KEYS.ONBOARDING_COMPLETED] = payload.hasCompletedOnboarding;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(payload || {}, 'leaderboardRepoUrl')) {
+            updates[STORAGE_KEYS.LEADERBOARD_REPO_URL] = String(payload.leaderboardRepoUrl || '').trim();
         }
 
         if (SESSION_DURATION_MS_OPTIONS.includes(payload?.sessionDurationMsPref)) {
@@ -379,16 +601,130 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
             await setStorageValues(updates);
         }
 
+        if (cliStatusSettingsChanged) {
+            const isEnabled = Object.prototype.hasOwnProperty.call(updates, STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED)
+                ? updates[STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED]
+                : Boolean(await getStorageValue(STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED));
+            syncCliStatusExportAlarm(isEnabled);
+            if (isEnabled) {
+                await exportCliStatus({ force: true });
+            }
+        }
+
         return getDashboardState();
     }
 
-    async function grantAccess(source, slug) {
+    async function exportCliStatus({ force = false } = {}) {
+        try {
+            await ensureInstallState();
+            const stored = await getStorageValues([
+                STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED,
+                STORAGE_KEYS.CLI_STATUS_EXPORT_PATH,
+            ]);
+            const enabled = Boolean(stored[STORAGE_KEYS.CLI_STATUS_EXPORT_ENABLED]);
+            if (!enabled && !force) {
+                return { success: true, skipped: true };
+            }
+
+            const state = await getDashboardState();
+            const exportPath = normalizeCliStatusExportPath(stored[STORAGE_KEYS.CLI_STATUS_EXPORT_PATH]);
+            const snapshot = createCliStatusSnapshot(state, {
+                installIdHash: await sha256Hex(String(state.installId || 'unknown-install')),
+            });
+            const downloadId = await downloadUrl({
+                url: `data:application/json;charset=utf-8,${encodeURIComponent(`${JSON.stringify(snapshot, null, 2)}\n`)}`,
+                filename: exportPath,
+                conflictAction: 'overwrite',
+                saveAs: false,
+            });
+
+            await setStorageValues({
+                [STORAGE_KEYS.CLI_STATUS_EXPORT_PATH]: exportPath,
+                [STORAGE_KEYS.CLI_STATUS_LAST_EXPORTED_AT]: snapshot.exportedAt,
+                [STORAGE_KEYS.CLI_STATUS_EXPORT_ERROR]: '',
+            });
+
+            return {
+                success: true,
+                downloadId,
+                path: exportPath,
+                status: snapshot,
+            };
+        } catch (error) {
+            const message = error.message || 'CLI status export failed.';
+            await setStorageValues({ [STORAGE_KEYS.CLI_STATUS_EXPORT_ERROR]: message });
+            return {
+                success: false,
+                error: message,
+            };
+        }
+    }
+
+    async function startAiFast(durationHours) {
+        await ensureInstallState();
+        await setStorageValues({
+            [STORAGE_KEYS.AI_FAST]: createAiFastState(durationHours),
+            [STORAGE_KEYS.IS_PAUSED]: false,
+            [STORAGE_KEYS.UI_MESSAGE]: 'AI fast started. Emergency bypass and pause are unavailable until it ends.',
+        });
+        return {
+            success: true,
+            state: await getDashboardState(),
+        };
+    }
+
+    async function exportAiFastCalendar() {
+        try {
+            await ensureInstallState();
+            const stored = await getStoredState();
+            const aiFast = normalizeAiFastState(stored[STORAGE_KEYS.AI_FAST]);
+            if (!aiFast.startedAt) {
+                return {
+                    success: false,
+                    error: 'No AI fast has been started.',
+                    state: await getDashboardState(),
+                };
+            }
+
+            if (aiFast.active) {
+                return {
+                    success: false,
+                    error: 'AI fast is still active.',
+                    state: await getDashboardState(),
+                };
+            }
+
+            const startedDate = new Date(aiFast.startedAt).toISOString().slice(0, 10);
+            const ics = createAiFastCalendar(aiFast);
+            const downloadId = await downloadUrl({
+                url: `data:text/calendar;charset=utf-8,${encodeURIComponent(ics)}`,
+                filename: `dorso/ai-fast-${startedDate}.ics`,
+                conflictAction: 'overwrite',
+                saveAs: false,
+            });
+
+            return {
+                success: true,
+                downloadId,
+                state: await getDashboardState(),
+            };
+        } catch (error) {
+            return {
+                success: false,
+                error: error.message || 'AI fast calendar export failed.',
+                state: await getDashboardState(),
+            };
+        }
+    }
+
+    async function grantAccess(message) {
         const stored = await getStoredState();
         const currentChallenge = stored[STORAGE_KEYS.CURRENT_CHALLENGE];
+        const provider = currentChallenge ? providers[currentChallenge.source] : null;
 
-        if (!currentChallenge || currentChallenge.source !== source || currentChallenge.slug !== slug) {
+        if (!currentChallenge || currentChallenge.source !== message.source || currentChallenge.slug !== message.slug || !provider) {
             const expectedSlug = currentChallenge?.slug || '';
-            const expectedSource = currentChallenge?.source_label || currentChallenge?.source || source;
+            const expectedSource = currentChallenge?.source_label || currentChallenge?.source || message.source;
             await setStorageValues({
                 [STORAGE_KEYS.UI_MESSAGE]: expectedSlug
                     ? `Wrong problem - solve ${expectedSlug} from ${expectedSource}.`
@@ -403,13 +739,44 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
             };
         }
 
-        await startSession();
+        const verification = await provider.verify(
+            currentChallenge,
+            currentChallenge.source === 'leetcode' ? message : message.submission,
+        );
+
+        if (!verification.ok) {
+            await setStorageValues({
+                [STORAGE_KEYS.UI_MESSAGE]: verification.message || 'Challenge answer did not verify.',
+            });
+
+            return {
+                success: false,
+                error: 'VERIFY_FAILED',
+                ...verification,
+                state: await getDashboardState(),
+            };
+        }
+
+        const solvedAt = Date.now();
+        await startSession(null, solvedAt);
         const streakState = recordSolve(stored[STORAGE_KEYS.STREAK_STATE]);
-        await setStorageValues({
-            [STORAGE_KEYS.LAST_LC_SUBMISSION_TIMESTAMP]: Date.now(),
+        const updates = {
             [STORAGE_KEYS.STREAK_STATE]: streakState,
-        });
-        await clearChallenge('Accepted on LeetCode. Dorso is standing down for the selected session duration.');
+            [STORAGE_KEYS.AI_FAST]: recordAiFastSolve(stored[STORAGE_KEYS.AI_FAST], currentChallenge, solvedAt),
+            [STORAGE_KEYS.LAST_SOLVE_RECEIPT]: {
+                problemTitle: currentChallenge.title,
+                sourceLabel: currentChallenge.source_label || currentChallenge.source,
+                timeToSolveMs: Math.max(0, solvedAt - Number(stored[STORAGE_KEYS.CHALLENGE_STARTED_AT] || solvedAt)),
+                solvedAt: new Date(solvedAt).toISOString(),
+                currentRun: streakState.currentRun,
+            },
+        };
+        if (currentChallenge.source === 'leetcode') {
+            updates[STORAGE_KEYS.LAST_LC_SUBMISSION_TIMESTAMP] = solvedAt;
+        }
+
+        await setStorageValues(updates);
+        await clearChallenge(`Accepted on ${currentChallenge.source_label || currentChallenge.source}. Dorso is standing down for the selected session duration.`);
 
         return {
             success: true,
@@ -421,6 +788,18 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
     async function useEmergencyBypass() {
         await ensureInstallState();
         const stored = await getStoredState();
+        const aiFast = normalizeAiFastState(stored[STORAGE_KEYS.AI_FAST]);
+        if (aiFast.active) {
+            await setStorageValues({
+                [STORAGE_KEYS.UI_MESSAGE]: 'AI fast is active. Emergency bypass is unavailable.',
+            });
+            return {
+                success: false,
+                error: 'AI_FAST_ACTIVE',
+                state: await getDashboardState(),
+            };
+        }
+
         const emergencyBypassState = getEmergencyBypassState({
             limit: stored[STORAGE_KEYS.EMERGENCY_BYPASSES_PER_WEEK],
             weekStart: stored[STORAGE_KEYS.BYPASS_WEEK_START],
@@ -442,6 +821,7 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
         await setStorageValues({
             [STORAGE_KEYS.BYPASS_WEEK_START]: emergencyBypassState.weekStart,
             [STORAGE_KEYS.BYPASSES_USED_THIS_WEEK]: emergencyBypassState.used + 1,
+            [STORAGE_KEYS.LAST_SOLVE_RECEIPT]: null,
             [STORAGE_KEYS.UI_MESSAGE]: `Emergency bypass used. ${emergencyBypassState.remaining - 1} remaining this week.`,
         });
 
@@ -465,9 +845,20 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
                 return { success: true, state: await saveSettings({ isPaused: Boolean(message.isPaused) }) };
             case MESSAGE_ACTIONS.EMERGENCY_BYPASS:
                 return useEmergencyBypass();
+            case MESSAGE_ACTIONS.EXPORT_CLI_STATUS: {
+                const result = await exportCliStatus({ force: true });
+                return {
+                    ...result,
+                    state: await getDashboardState(),
+                };
+            }
+            case MESSAGE_ACTIONS.START_AI_FAST:
+                return startAiFast(message.durationHours);
+            case MESSAGE_ACTIONS.EXPORT_AI_FAST_ICS:
+                return exportAiFastCalendar();
             case MESSAGE_ACTIONS.SUBMISSION_RESULT:
-                if (message.success && message.source === 'leetcode' && message.slug) {
-                    return grantAccess('leetcode', message.slug);
+                if (message.source && message.slug) {
+                    return grantAccess(message);
                 }
                 return { success: false };
             case MESSAGE_ACTIONS.CLEAR_UI_MESSAGE:
@@ -493,5 +884,13 @@ import leetcodeProvider from '../lib/providers/leetcode-provider.js';
 
     browserApi.runtime.onStartup?.addListener(() => {
         ensureInstallState().catch(() => {});
+    });
+
+    browserApi.alarms?.onAlarm?.addListener((alarm) => {
+        if (alarm.name !== CLI_STATUS_EXPORT_ALARM) {
+            return;
+        }
+
+        exportCliStatus({ force: false }).catch(() => {});
     });
 })();
