@@ -1,3 +1,145 @@
+[{
+  "id": "mcq-recursion-001",
+  "prompt": "What is recursion in programming?",
+  "choices": [
+    "A function calling itself",
+    "A loop nested inside another loop",
+    "A function with multiple return values",
+    "A function that never returns"
+  ],
+  "answerIndex": 0,
+  "tags": ["recursion"],
+  "difficulty": 1,
+  "source": "community"
+},
+{
+  "id": "mcq-recursion-002",
+  "prompt": "Why does every recursive function need a base case?",
+  "choices": [
+    "To increase execution speed",
+    "To prevent infinite recursion",
+    "To reduce variable usage",
+    "To improve compiler optimization"
+  ],
+  "answerIndex": 1,
+  "tags": ["recursion", "base-case"],
+  "difficulty": 1,
+  "source": "community"
+},
+{
+  "id": "mcq-recursion-003",
+  "prompt": "Which data structure keeps track of recursive function calls?",
+  "choices": [
+    "Queue",
+    "Stack",
+    "Heap",
+    "Linked List"
+  ],
+  "answerIndex": 1,
+  "tags": ["recursion", "stack"],
+  "difficulty": 2,
+  "source": "community"
+},
+{
+  "id": "mcq-recursion-004",
+  "prompt": "What is the most likely result if a recursive function never reaches its base case?",
+  "choices": [
+    "Compilation error",
+    "Stack overflow",
+    "Memory leak only",
+    "Infinite loop without function calls"
+  ],
+  "answerIndex": 1,
+  "tags": ["recursion", "stack-overflow"],
+  "difficulty": 2,
+  "source": "community"
+},
+{
+  "id": "mcq-recursion-005",
+  "prompt": "Which problem is commonly solved using recursion?",
+  "choices": [
+    "Binary tree traversal",
+    "Linear array initialization",
+    "Hash table insertion",
+    "Bubble sort optimization"
+  ],
+  "answerIndex": 0,
+  "tags": ["recursion", "binary-tree"],
+  "difficulty": 2,
+  "source": "community"
+},
+{
+  "id": "mcq-recursion-006",
+  "prompt": "What is tail recursion?",
+  "choices": [
+    "A recursive call that is the final operation in a function",
+    "A recursive function with two base cases",
+    "A recursive function that returns two values",
+    "A recursive function that uses a queue"
+  ],
+  "answerIndex": 0,
+  "tags": ["recursion", "tail-recursion"],
+  "difficulty": 3,
+  "source": "community"
+},
+{
+  "id": "mcq-recursion-007",
+  "prompt": "Compared to iteration, recursion may have which disadvantage?",
+  "choices": [
+    "It cannot return values",
+    "It cannot process arrays",
+    "It may use more stack memory",
+    "It always produces incorrect results"
+  ],
+  "answerIndex": 2,
+  "tags": ["recursion", "memory"],
+  "difficulty": 2,
+  "source": "community"
+},
+{
+  "id": "mcq-recursion-008",
+  "prompt": "Which mathematical function is frequently used to introduce recursion?",
+  "choices": [
+    "Factorial",
+    "Average",
+    "Median",
+    "Least common multiple"
+  ],
+  "answerIndex": 0,
+  "tags": ["recursion", "factorial"],
+  "difficulty": 1,
+  "source": "community"
+},
+{
+  "id": "mcq-recursion-009",
+  "prompt": "In divide-and-conquer algorithms, recursion is primarily used to:",
+  "choices": [
+    "Sort data before processing",
+    "Break a problem into smaller subproblems",
+    "Reduce memory allocation",
+    "Avoid using loops"
+  ],
+  "answerIndex": 1,
+  "tags": ["recursion", "divide-and-conquer"],
+  "difficulty": 3,
+  "source": "community"
+},
+{
+  "id": "mcq-recursion-010",
+  "prompt": "Which recursive algorithm benefits significantly from memoization because it has overlapping subproblems?",
+  "choices": [
+    "Merge Sort",
+    "Binary Search",
+    "Recursive Fibonacci",
+    "Heap Sort"
+  ],
+  "answerIndex": 2,
+  "tags": ["recursion", "memoization", "dynamic-programming"],
+  "difficulty": 3,
+  "source": "community"
+}
+
+]
 [
   {
     "id": "mcq-big-o-001",
